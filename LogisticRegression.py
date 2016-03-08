@@ -16,7 +16,7 @@ test_set = dict()
 # Vocabulary/tokens in the training set
 training_set_vocab = []
 
-# store weights as dictionary. w0 initiall 0.0, others initially 0.5. token : weight value
+# store weights as dictionary. w0 initiall 0.0, others initially 0.0. token : weight value
 weights = {'weight_zero': 0.0}
 
 # ham = 0 for not spam, spam = 1 for is spam
@@ -24,7 +24,7 @@ classes = ["ham", "spam"]
 
 # Natural learning rate constant and number of iterations for learning weights
 learning_constant = .001
-num_iterations = 1000
+num_iterations = 10
 
 # Read all text files in the given directory and construct the data set, D
 # the directory path should just be like "train/ham" for example
@@ -42,12 +42,11 @@ def makeDataSet(storage_dict, directory, true_class):
 
 # Extracts the vocabulary of all the text in a data set
 def extractVocab(data_set):
-    all_text = ""
     v = []
-    for x in data_set:
-        all_text += data_set[x].getText()
-    for y in bagOfWords(all_text):
-        v.append(y)
+    for i in data_set:
+        for j in data_set[i].getWordFreqs():
+            if j not in v:
+                v.append(j)
     return v
 
 
@@ -59,7 +58,51 @@ def bagOfWords(text):
 
 # Learn weights
 def learnWeights():
-    pass
+    for x in range(0, num_iterations):
+        print x
+        for w in weights:
+            sum = 0.0
+            for i in training_set:
+                y_sample = 0.0
+                if training_set[i].getTrueClass() == classes[1]:
+                    y_sample = 1.0
+                # If token isn't in document
+                if w not in training_set[i].getWordFreqs():
+                    training_set[i].getWordFreqs()[w] = 0.0
+                sum += float(training_set[i].getWordFreqs()[w]) * (y_sample - calculateCondProb(classes[1], training_set[i]))
+            weights[w] += learning_constant * sum
+            print w + ": %.8f" % weights[w]
+
+
+# Calculate conditional probability for the specified doc. Where class_prob is 1|X or 0|X
+# 1 is spam and 0 is ham
+def calculateCondProb(class_prob, doc):
+    # Total tokens in doc. Used to normalize word counts to stay within 0 and 1 for avoiding overflow
+    # total_tokens = 0.0
+    # for i in doc.getWordFreqs():
+    #     total_tokens += doc.getWordFreqs()[i]
+
+    # Handle 0
+    if class_prob == classes[0]:
+        sum_wx_0 = weights['weight_zero']
+        for i in doc.getWordFreqs():
+            # If weight for token in training set isn't in weights yet, set it to 0.0
+            # if i not in weights:
+            #     weights[i] = 0.0
+            # sum of weights * token count for each token in each document
+            sum_wx_0 += weights[i] * float(doc.getWordFreqs()[i])
+        return 1.0 / (1.0 + math.exp(float(sum_wx_0)))
+
+    # Handle 1
+    elif class_prob == classes[1]:
+        sum_wx_1 = weights['weight_zero']
+        for i in doc.getWordFreqs():
+            # If weight for token in training set isn't in weights yet, set it to 0.0
+            # if i not in weights:
+            #     weights[i] = 0.0
+            # sum of weights * token count for each token in each document
+            sum_wx_1 += weights[i] * float(doc.getWordFreqs()[i])
+        return math.exp(float(sum_wx_1)) / (1.0 + math.exp(float(sum_wx_1)))
 
 
 # Document class to store email instances easier
@@ -104,9 +147,17 @@ def main(training_spam_dir, training_ham_dir, test_spam_dir, test_ham_dir):
     # Extract training set vocabulary
     training_set_vocab = extractVocab(training_set)
 
-    # Set all weights in training set vocabulary to be initially 0.5. w0 ('weight_zero') is initially 0.0
+    # Set all weights in training set vocabulary to be initially 0.0. w0 ('weight_zero') is initially 0.0
     for i in training_set_vocab:
-        weights[i] = 0.5
+        weights[i] = 0.0
+
+    learnWeights()
+    # for i in weights:
+    #     print i + ": %.1f" % weights[i]
+
+    # for i in training_set:
+    #     print "1 prob:\t%.16f" % calculateCondProb(classes[1], training_set[i])
+    #     print "\t0 prob:\t%.16f" % calculateCondProb(classes[0], training_set[i])
 
     # Prints out the data set for testing purposes to make sure data is correctly read
     # for i in test_set:
