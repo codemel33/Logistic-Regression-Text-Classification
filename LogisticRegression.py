@@ -8,23 +8,34 @@ import sys
 import collections
 import re
 import math
+import copy
 
 # Stores emails as dictionaries. email_file_name : Document (class defined below)
 training_set = dict()
 test_set = dict()
 
+# Filtered sets without stop words
+filtered_training_set = dict()
+filtered_test_set = dict()
+
+# list of Stop words
+stop_words = []
+
 # Vocabulary/tokens in the training set
 training_set_vocab = []
+filtered_training_set_vocab = []
 
 # store weights as dictionary. w0 initiall 0.0, others initially 0.0. token : weight value
 weights = {'weight_zero': 0.0}
+filtered_weights = {'weight_zero': 0.0}
 
 # ham = 0 for not spam, spam = 1 for is spam
 classes = ["ham", "spam"]
 
-# Natural learning rate constant and number of iterations for learning weights
+# Natural learning rate constant, number of iterations for learning weights, and penalty (lambda) constant
 learning_constant = .001
-num_iterations = 10
+num_iterations = 100
+penalty = 0.0
 
 # Read all text files in the given directory and construct the data set, D
 # the directory path should just be like "train/ham" for example
@@ -50,33 +61,54 @@ def extractVocab(data_set):
     return v
 
 
+# Set the stop words
+def setStopWords():
+    stops = []
+    with open('stop_words.txt', 'r') as txt:
+        stops = (txt.read().splitlines())
+    return stops
+
+
+# Remove stop words from data set and store in dictionary
+def removeStopWords(stops, data_set):
+    filtered_data_set = copy.deepcopy(data_set)
+    for i in stops:
+        for j in filtered_data_set:
+            if i in filtered_data_set[j].getWordFreqs():
+                del filtered_data_set[j].getWordFreqs()[i]
+    return filtered_data_set
+
+
 # counts frequency of each word in the text files and order of sequence doesn't matter
 def bagOfWords(text):
     bagsofwords = collections.Counter(re.findall(r'\w+', text))
     return dict(bagsofwords)
 
 
-# Learn weights
-def learnWeights():
-    for x in range(0, num_iterations):
+# Learn weights by using gradient ascent
+def learnWeights(training, weights_param, iterations, lam):
+    # Adjust weights num_iterations times
+    for x in range(0, iterations):
         print x
-        for w in weights:
+        # Adjust each weight...
+        counter = 1
+        for w in weights_param:
             sum = 0.0
-            for i in training_set:
+            # ...using all training instances
+            for i in training:
+                # y_sample is true y value (classification) of the doc
                 y_sample = 0.0
-                if training_set[i].getTrueClass() == classes[1]:
+                if training[i].getTrueClass() == classes[1]:
                     y_sample = 1.0
-                # If token isn't in document
-                if w not in training_set[i].getWordFreqs():
-                    training_set[i].getWordFreqs()[w] = 0.0
-                sum += float(training_set[i].getWordFreqs()[w]) * (y_sample - calculateCondProb(classes[1], training_set[i]))
-            weights[w] += learning_constant * sum
-            print w + ": %.8f" % weights[w]
+                # Only add to the sum if the doc contains the token (the count of it would be 0 anyways)
+                if w in training[i].getWordFreqs():
+                    sum += float(training[i].getWordFreqs()[w]) * (y_sample - calculateCondProb(classes[1], weights_param, training[i]))
+            weights_param[w] += ((learning_constant * sum) - (learning_constant * float(lam) * weights_param[w]))
 
 
 # Calculate conditional probability for the specified doc. Where class_prob is 1|X or 0|X
 # 1 is spam and 0 is ham
-def calculateCondProb(class_prob, doc):
+def calculateCondProb(class_prob, weights_param, doc):
     # Total tokens in doc. Used to normalize word counts to stay within 0 and 1 for avoiding overflow
     # total_tokens = 0.0
     # for i in doc.getWordFreqs():
@@ -84,31 +116,42 @@ def calculateCondProb(class_prob, doc):
 
     # Handle 0
     if class_prob == classes[0]:
-        sum_wx_0 = weights['weight_zero']
+        sum_wx_0 = weights_param['weight_zero']
         for i in doc.getWordFreqs():
-            # If weight for token in training set isn't in weights yet, set it to 0.0
-            # if i not in weights:
-            #     weights[i] = 0.0
+            if i not in weights_param:
+                weights_param[i] = 0.0
             # sum of weights * token count for each token in each document
-            sum_wx_0 += weights[i] * float(doc.getWordFreqs()[i])
+            sum_wx_0 += weights_param[i] * float(doc.getWordFreqs()[i])
         return 1.0 / (1.0 + math.exp(float(sum_wx_0)))
 
     # Handle 1
     elif class_prob == classes[1]:
-        sum_wx_1 = weights['weight_zero']
+        sum_wx_1 = weights_param['weight_zero']
         for i in doc.getWordFreqs():
-            # If weight for token in training set isn't in weights yet, set it to 0.0
-            # if i not in weights:
-            #     weights[i] = 0.0
+            if i not in weights_param:
+                weights_param[i] = 0.0
             # sum of weights * token count for each token in each document
-            sum_wx_1 += weights[i] * float(doc.getWordFreqs()[i])
+            sum_wx_1 += weights_param[i] * float(doc.getWordFreqs()[i])
         return math.exp(float(sum_wx_1)) / (1.0 + math.exp(float(sum_wx_1)))
+
+
+# Apply algorithm to guess class for specific instance of test set
+def applyLogisticRegression(data_instance, weights_param):
+    score = {}
+    score[0] = calculateCondProb(classes[0], weights_param, data_instance)
+    score[1] = calculateCondProb(classes[1], weights_param, data_instance)
+    if score[1] > score[0]:
+        return classes[1]
+    else:
+        return classes[0]
+
 
 
 # Document class to store email instances easier
 class Document:
     text = ""
-    word_freqs = {}
+    # x0 assumed 1 for all documents (training examples)
+    word_freqs = {'weight_zero': 1.0}
 
     # spam or ham
     true_class = ""
@@ -137,36 +180,56 @@ class Document:
 
 
 # takes directories holding the data text files as paramters. "train/ham" for example
-def main(training_spam_dir, training_ham_dir, test_spam_dir, test_ham_dir):
+def main(training_spam_dir, training_ham_dir, test_spam_dir, test_ham_dir, lambda_constant):
     # Set up data sets. Dictionaries containing the text, word frequencies, and true/learned classifications
     makeDataSet(training_set, training_spam_dir, classes[1])
     makeDataSet(training_set, training_ham_dir, classes[0])
     makeDataSet(test_set, test_spam_dir, classes[1])
     makeDataSet(test_set, test_ham_dir, classes[0])
+    penalty = lambda_constant
+
+    # Set the stop words list
+    stop_words = setStopWords()
+
+    # Set up data sets without stop words
+    filtered_training_set = removeStopWords(stop_words, training_set)
+    filtered_test_set = removeStopWords(stop_words, test_set)
 
     # Extract training set vocabulary
     training_set_vocab = extractVocab(training_set)
+    filtered_training_set_vocab = extractVocab(filtered_training_set)
 
     # Set all weights in training set vocabulary to be initially 0.0. w0 ('weight_zero') is initially 0.0
     for i in training_set_vocab:
         weights[i] = 0.0
+    for i in filtered_training_set_vocab:
+        filtered_weights[i] = 0.0
 
-    learnWeights()
-    # for i in weights:
-    #     print i + ": %.1f" % weights[i]
+    # Learn weights
+    learnWeights(training_set, weights, num_iterations, penalty)
+    learnWeights(filtered_training_set, filtered_weights, num_iterations, penalty)
 
-    # for i in training_set:
-    #     print "1 prob:\t%.16f" % calculateCondProb(classes[1], training_set[i])
-    #     print "\t0 prob:\t%.16f" % calculateCondProb(classes[0], training_set[i])
 
-    # Prints out the data set for testing purposes to make sure data is correctly read
-    # for i in test_set:
-    #     print i + " : "
-    #     print test_set[i].getText()
-    #     print test_set[i].getWordFreqs()
-    #     print test_set[i].getTrueClass()
-    #     print
+    # Apply algorithm on test set
+    correct_guesses = 0.0
+    for i in test_set:
+        test_set[i].setLearnedClass(applyLogisticRegression(test_set[i], weights))
+        if test_set[i].getLearnedClass() == test_set[i].getTrueClass():
+            correct_guesses += 1.0
+
+    # Apply algorithm on filtered test set
+    correct_guesses_filtered = 0.0
+    for i in filtered_test_set:
+        filtered_test_set[i].setLearnedClass(applyLogisticRegression(filtered_test_set[i], filtered_weights))
+        if filtered_test_set[i].getLearnedClass() == filtered_test_set[i].getTrueClass():
+            correct_guesses_filtered += 1.0
+
+    print "Correct guesses before filtering stop words:\t%d/%s" % (correct_guesses, len(test_set))
+    print "Accuracy before filtering stop words:\t\t\t%.4f%%" % (100.0 * float(correct_guesses) / float(len(test_set)))
+    print
+    print "Correct guesses after filtering stop words:\t\t%d/%s" % (correct_guesses_filtered, len(filtered_test_set))
+    print "Accuracy after filtering stop words:\t\t\t%.4f%%" % (100.0 * float(correct_guesses_filtered) / float(len(filtered_test_set)))
 
 
 if __name__ == '__main__':
-    main(sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4])
+    main(sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5])
